@@ -1,0 +1,93 @@
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: 26px;
+  padding-inline: 8px 10px;
+  border-radius: var(--r-full);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+  transition:
+    background-color var(--t-med) var(--ease),
+    color var(--t-med) var(--ease);
+}
+
+.sm {
+  min-block-size: 22px;
+  padding-inline: 6px 8px;
+  font-size: var(--fs-xs);
+  gap: 4px;
+}
+
+.ok {
+  background: var(--ok-soft);
+  color: var(--ok-text);
+}
+
+.warn {
+  background: var(--warn-soft);
+  color: var(--warn-text);
+}
+
+.danger {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.info,
+.busy {
+  background: var(--info-soft);
+  color: var(--info-text);
+}
+
+.neutral {
+  background: var(--neutral-soft);
+  color: var(--neutral-text);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.dotWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.dot {
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.dot.ok {
+  background: var(--ok);
+}
+
+.dot.warn {
+  background: var(--warn);
+}
+
+.dot.danger {
+  background: var(--danger);
+}
+
+.dot.info,
+.dot.busy {
+  background: var(--info);
+}
+
+.dot.neutral {
+  background: var(--neutral);
+}

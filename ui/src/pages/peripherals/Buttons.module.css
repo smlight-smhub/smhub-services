@@ -1,0 +1,85 @@
+/* The hub's buttons, drawn left to right as on the case. */
+.panel {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--s-5);
+  padding: var(--s-5) var(--s-4);
+  background: var(--surface-sunken);
+  border-radius: var(--r-lg);
+}
+
+.cap {
+  min-inline-size: 76px;
+  block-size: 44px;
+  padding-inline: var(--s-3);
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-md);
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  box-shadow: 0 3px 0 var(--border-strong);
+  transition:
+    background-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+.down {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+  transform: translateY(3px);
+  box-shadow: none;
+}
+
+/* RST: there, but the hub cannot see it */
+.inert {
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-2);
+  box-shadow: none;
+}
+
+.states {
+  list-style: none;
+  margin: var(--s-4) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
+}
+
+.states li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-1) var(--s-3);
+}
+
+.states strong {
+  font-family: var(--font-mono);
+  min-inline-size: 3.5em;
+}
+
+.gesture {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s-3);
+  align-items: end;
+}
+
+.gesture + .gesture {
+  margin-block-start: var(--s-3);
+}
+
+@media (max-width: 560px) {
+  .gesture {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

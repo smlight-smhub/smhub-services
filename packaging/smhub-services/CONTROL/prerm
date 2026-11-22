@@ -1,0 +1,16 @@
+#!/bin/sh
+# Stop the daemon before an upgrade or removal; postinst starts it again if it
+# was running. OpenRC's supervise-daemon does the stop (retry TERM/30/KILL/5 in
+# the OpenRC script) and waits until the process has gone.
+
+SERVICE_WAS_RUNNING="/tmp/smhub-services-was-running"
+PIDFILE="/var/run/smhub-services.pid"
+
+if [ -f "$PIDFILE" ]; then
+    echo "Stopping smhub-services before upgrade/removal..."
+    # Mark that service was running so postinst can restart it
+    touch "$SERVICE_WAS_RUNNING"
+    rc-service smhub-services stop || true
+fi
+
+exit 0

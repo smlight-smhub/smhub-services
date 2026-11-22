@@ -1,0 +1,22 @@
+[package]
+name = "smhubd"
+description = "The daemon of smhub-services, the SMHUB's backend."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+smhub-model.workspace = true
+smhub-store.workspace = true
+smhub-sys.workspace = true
+smhub-api.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+nix.workspace = true
+
+[lints]
+workspace = true

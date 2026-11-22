@@ -1,0 +1,31 @@
+[package]
+name = "smhub-sys"
+description = "Everything that touches the operating system (replaces the Python system-config library)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+smhub-model.workspace = true
+smhub-auth.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
+tracing.workspace = true
+nix.workspace = true
+inotify.workspace = true
+futures-util.workspace = true
+bytes.workspace = true
+base64.workspace = true
+sha2.workspace = true
+snow.workspace = true
+spidev.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[lints]
+workspace = true

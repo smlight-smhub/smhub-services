@@ -1,0 +1,54 @@
+#!/bin/sh
+# Post-installation script for smhub-services 2 (smhubd).
+#
+# Same protocol as the 1.x package on OpenRC: install the OpenRC script, keep
+# the boot runlevel link, seed the database only when there is none, and start
+# the service again only if prerm stopped it. The database is never rewritten
+# here: smhubd reads the existing backend.db as it is (older layouts are brought
+# to the current one by smhubd itself, with the same changes Alembic made).
+#
+# The package needs OS 1.0.0 or later (Required-OS-Version), which runs OpenRC;
+# the BusyBox-init path of the earliest packages (OS 0.3.x) is not carried over.
+BASE=/opt/smhub-services
+
+# The command OpenRC starts. The package ships the link too; this repairs a link
+# left by the 1.x postinst that pointed into the old Python environment.
+mkdir -p /opt/bin
+ln -sfn ${BASE}/bin/smhubd /opt/bin/smhub-services
+
+# Remove what the 1.x package left behind that opkg does not track: bytecode
+# caches in the old Python environment. Its files are gone after the upgrade.
+if [ -d ${BASE}/venv ]; then
+    find ${BASE}/venv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+    find ${BASE}/venv -depth -type d -empty -delete 2>/dev/null || true
+fi
+
+if [ ! -x /sbin/openrc-run ]; then
+    echo "smhub-services 2 needs OpenRC (OS 1.0.0 or later)" >&2
+    exit 1
+fi
+cp -f /var/lib/opkg/info/smhub-services.openrc /etc/init.d/smhub-services
+chmod 0755 /etc/init.d/smhub-services
+if [ ! -L /etc/runlevels/boot/smhub-services ]; then
+    echo "Creating OpenRC symlink for smhub-services"
+    ln -sf /etc/init.d/smhub-services /etc/runlevels/boot/smhub-services
+fi
+# a BusyBox-init link from a package before OS 0.9.4 has no use under OpenRC
+rm -f /etc/init.d/S98smhub-services
+
+if [ ! -f ${BASE}/config/backend.db ]; then
+    # Copy default database file if it doesn't exist
+    mkdir -p ${BASE}/config
+    cp /var/lib/opkg/info/smhub-services.db ${BASE}/config/backend.db
+    chown -R smlight:smlight ${BASE}/config
+fi
+
+# Restart service only if it was running before upgrade
+SERVICE_WAS_RUNNING="/tmp/smhub-services-was-running"
+if [ -f "$SERVICE_WAS_RUNNING" ]; then
+    echo "Restarting smhub-services after upgrade..."
+    rc-service smhub-services start || true
+    rm -f "$SERVICE_WAS_RUNNING"
+fi
+
+exit 0

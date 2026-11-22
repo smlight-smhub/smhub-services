@@ -1,0 +1,33 @@
+.slider {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.label {
+  font-weight: var(--fw-medium);
+}
+
+.value {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.range {
+  inline-size: 100%;
+  min-block-size: 32px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.range:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

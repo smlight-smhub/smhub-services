@@ -1,0 +1,30 @@
+#!/bin/sh
+# Post-removal script for smhub-services. opkg (0.7.0 on the hubs) calls it
+# with "upgrade <new version>" when another version replaces this one: then
+# there is nothing to do, the new package's postinst takes over. With "remove"
+# the package goes, and what it set up outside its file list goes with it.
+
+case "$1" in
+    remove|purge) ;;
+    *) exit 0 ;;
+esac
+
+if [ -L /opt/bin/smhub-services ]; then
+    rm -f /opt/bin/smhub-services
+fi
+
+if [ -f /etc/init.d/smhub-services ]; then
+    echo "Removing OpenRC init script for smhub-services"
+    rm -f /etc/init.d/smhub-services
+fi
+if [ -L /etc/runlevels/boot/smhub-services ]; then
+    echo "Removing OpenRC symlink for smhub-services"
+    rm -f /etc/runlevels/boot/smhub-services
+fi
+rm -f /etc/init.d/S98smhub-services
+# prerm marks a running service for the postinst of an upgrade; after a
+# removal no postinst follows, and a later install must not act on it
+rm -f /tmp/smhub-services-was-running
+# Bytecode the radio flasher wrote next to its libraries
+rm -rf /opt/smhub-services/flasher 2>/dev/null || true
+exit 0

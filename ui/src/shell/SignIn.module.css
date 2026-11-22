@@ -1,0 +1,109 @@
+.screen,
+.overlay {
+  display: grid;
+  place-items: center;
+  min-block-size: 100dvh;
+  padding: var(--s-4);
+  background:
+    radial-gradient(120% 80% at 50% -10%, var(--hero-from), transparent 60%),
+    var(--bg);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: fade var(--t-slow) var(--ease);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  inline-size: min(420px, 100%);
+  padding: var(--s-6) var(--s-5);
+  background: var(--surface);
+  border: var(--card-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-3);
+  animation: rise var(--t-slow) var(--ease-out);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.title {
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-bold);
+}
+
+.sub,
+.text,
+.help {
+  color: var(--text-3);
+}
+
+.help {
+  font-size: var(--fs-sm);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.offlineIcon {
+  display: grid;
+  place-items: center;
+  inline-size: 56px;
+  block-size: 56px;
+  border-radius: 50%;
+  background: var(--warn-soft);
+  color: var(--warn-text);
+}
+
+.splash {
+  display: grid;
+  place-items: center;
+  min-block-size: 100dvh;
+  animation: late 0.4s 0.4s var(--ease) both;
+}
+
+.splash svg {
+  inline-size: 56px;
+  block-size: 56px;
+  animation: breathe 1.6s var(--ease) infinite;
+}
+
+@keyframes breathe {
+  50% {
+    transform: scale(0.92);
+    opacity: 0.7;
+  }
+}
+
+@keyframes late {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}

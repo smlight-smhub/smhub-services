@@ -1,0 +1,71 @@
+.portRows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.portRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-3);
+  align-items: end;
+  padding: var(--s-3);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.portRow > :first-child {
+  grid-column: 1 / -1;
+}
+
+.portRemove {
+  justify-self: end;
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 720px) {
+  .portRow {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+
+  .portRow > :first-child {
+    grid-column: auto;
+  }
+
+  .portRemove {
+    grid-column: auto;
+    margin-block-end: 2px;
+  }
+}
+
+.addPort {
+  align-self: flex-start;
+}
+
+.hero {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+
+.heroIcon {
+  display: grid;
+  place-items: center;
+  inline-size: 64px;
+  block-size: 64px;
+  border-radius: var(--r-lg);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  flex: none;
+}
+
+.powerRow {
+  display: flex;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.hiddenFrame {
+  display: none;
+}

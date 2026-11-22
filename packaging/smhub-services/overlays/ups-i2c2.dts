@@ -1,0 +1,17 @@
+// I2C2 on J10 (pins 1 SCL and 3 SDA) for an SMLIGHT UPS board, full-size SMHUB only
+// (docs/peripherals.md, "UPS board"). The board's device tree muxes the bus (`i2c2_cfg`, with
+// pull-ups) but leaves it disabled; this turns it on, and names it `i2c2` so that it is always
+// /dev/i2c-2 (without an alias Linux would number it after the highest alias, i2c4). The daemon
+// copies the compiled overlay to /mnt/misc/overlays when the owner marks a UPS board as connected
+// and removes it again; the OS lists every overlay there in uEnv.txt for U-Boot, so it applies
+// from the next start.
+/dts-v1/;
+/plugin/;
+
+&i2c2 {
+	status = "okay";
+};
+
+&{/aliases} {
+	i2c2 = "/soc/i2c@4020000";
+};

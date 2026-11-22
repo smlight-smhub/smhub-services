@@ -1,0 +1,26 @@
+# Builder for smhub-services and smhub-ui: pinned Rust toolchain with the RISC-V musl target, zig as the C
+# cross-compiler and linker for the bundled SQLite (through cargo-zigbuild), Node.js for the web UI,
+# the device-tree compiler, and the tools that pack opkg packages. Nothing from this image reaches
+# the hub but what it builds. Build: docker build -t smhub-services-build:2 -f packaging/Dockerfile.build packaging
+FROM rust:1.95-bookworm
+ARG ZIG_VERSION=0.13.0
+ARG CARGO_ZIGBUILD_VERSION=0.19.8
+ARG NODE_MAJOR=22
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 xz-utils binutils file ca-certificates curl gnupg sqlite3 \
+ && rm -rf /var/lib/apt/lists/*
+RUN rustup target add riscv64gc-unknown-linux-musl x86_64-unknown-linux-musl \
+ && rustup component add clippy rustfmt
+RUN curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o /tmp/zig.tar.xz \
+ && mkdir /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 && rm /tmp/zig.tar.xz \
+ && ln -s /opt/zig/zig /usr/local/bin/zig
+RUN cargo install --locked --version "${CARGO_ZIGBUILD_VERSION}" cargo-zigbuild
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
+# the device-tree compiler for the package's own overlay (packaging/smhub-services/overlays)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends device-tree-compiler \
+ && rm -rf /var/lib/apt/lists/*
+ENV CARGO_BUILD_JOBS=24 CARGO_TARGET_DIR=/target
+WORKDIR /src

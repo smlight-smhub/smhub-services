@@ -1,0 +1,32 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.group + .group {
+  padding-block-start: var(--s-5);
+  border-block-start: 1px solid var(--border);
+}
+
+.legend {
+  padding: 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  margin-block-end: var(--s-1);
+}
+
+.groupDesc {
+  color: var(--text-3);
+  margin-block-start: calc(-1 * var(--s-3));
+}

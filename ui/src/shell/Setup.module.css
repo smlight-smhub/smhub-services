@@ -1,0 +1,130 @@
+.screen {
+  display: grid;
+  place-items: center;
+  min-block-size: 100dvh;
+  padding: var(--s-4);
+  background:
+    radial-gradient(120% 70% at 50% -10%, var(--hero-from), transparent 65%),
+    var(--bg);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  inline-size: min(620px, 100%);
+  padding: var(--s-5);
+  background: var(--surface);
+  border: var(--card-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-3);
+}
+
+@media (min-width: 720px) {
+  .card {
+    padding: var(--s-6);
+  }
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.count {
+  flex: 1;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.skip {
+  margin-inline-start: auto;
+  padding: var(--s-2) var(--s-3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.skip:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.dots {
+  display: flex;
+  gap: 6px;
+}
+
+.dot {
+  flex: 1;
+  block-size: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  transition: background-color var(--t-slow) var(--ease);
+}
+
+.dotOn {
+  background: var(--accent);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  animation: slide var(--t-slow) var(--ease-out);
+}
+
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+:global([dir='rtl']) .body {
+  animation-name: slideRtl;
+}
+
+@keyframes slideRtl {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+.title {
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+  outline: none;
+}
+
+.lead {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--text-2);
+}
+
+.small {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+.preview {
+  padding: var(--s-4);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  margin-block-start: var(--s-2);
+}

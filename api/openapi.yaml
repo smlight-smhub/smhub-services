@@ -1,0 +1,2959 @@
+openapi: 3.1.0
+info:
+  title: SMHUB API
+  version: 2.0.0
+  description: |
+    The API between `smhubd` and the SMHUB web UI. It is the source of truth
+    (decisions D7-D10): the daemon implements it and the UI's types are
+    generated from it.
+
+    Conventions (D8):
+    - `GET` reads a resource; `PATCH` changes its settings; `POST .../<action>`
+      runs a command. No `GET` changes anything.
+    - A `PATCH` is validated as a whole first. On an error nothing is applied and
+      the answer names the field.
+    - Errors always have the shape `Error`. The UI translates `error.code`.
+    - Values are canonical: timestamps are UTC RFC 3339 strings, sizes are bytes,
+      durations are seconds, temperatures are degrees Celsius, frequencies MHz,
+      currency amounts carry their ISO 4217 code. Formatting is the UI's job.
+    - Secrets are write-only: a `GET` reports `*_set: true`, never the value.
+    - Commands that take time answer `202` with an `Operation`; its progress
+      arrives on the event connection and from `GET /operations/{id}`.
+    - A path segment only carries identifiers the hub makes (package and service
+      names, ids, log names; never containing `/`). A value from outside, such
+      as a Wi-Fi name, an MQTT user name or an SSH key fingerprint, is a query
+      parameter: the hub's nginx (part of the OS image) decodes `%2F` in the
+      path before passing a request on, which would split such a value.
+
+    Event connection (`/ws/v2/events`, D9). Text frames carrying JSON:
+    - client to hub: `{"op":"sub","resources":["metrics","apps"]}`,
+      `{"op":"unsub","resources":["metrics"]}`, `{"op":"ping"}`
+    - hub to client: `{"type":"state","resource":"metrics","data":{...}}` once per
+      subscription, then again whenever the resource changes;
+      `{"type":"operation","data":Operation}` for every operation change, sent
+      to every connection whether or not it subscribed to `operations`
+      (subscribing to `operations` adds the full list as a `state` message);
+      `{"type":"pong"}`; `{"type":"reload"}` when the client fell behind.
+    Resources available on the event connection: `system`, `metrics`, `network`,
+    `wifi`, `services`, `apps`, `updates`, `lte`, `radios`, `operations`, `vpn`,
+    `hardware`, `ir`. Their `data` has the same shape as the matching `GET`.
+
+    Other programs (Home Assistant, scripts) sign in with an API token (`POST
+    /tokens`), sent as `Authorization: Bearer <token>`. A token acts as the account
+    that made it, but cannot manage sign-in, accounts or tokens, or open the
+    terminal.
+
+    Byte streams: `/ws/v2/terminal` (binary frames both ways; a text frame
+    `{"type":"resize","cols":80,"rows":24}` resizes) and `/ws/v2/logs/{name}`
+    (text frames, one JSON `{"line":"..."}` per log line).
+servers:
+  - url: /api/v2
+security:
+  - session: []
+  - token: []
+tags:
+  - name: system
+  - name: session
+  - name: apps
+  - name: network
+  - name: settings
+  - name: maintenance
+  - name: hardware
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      security: []
+      summary: Liveness check
+      responses:
+        "200":
+          description: The daemon answers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+
+  /system:
+    get:
+      tags: [system]
+      security: []
+      summary: What this hub is and what it can do (public)
+      responses:
+        "200":
+          description: System description
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/System" }
+
+  /system/setup-done:
+    post:
+      tags: [system]
+      summary: The first-run setup was finished or skipped
+      description: Clears `System.setup_needed` for every browser.
+      responses:
+        "204": { description: Recorded }
+        default: { $ref: "#/components/responses/Error" }
+
+  /system/reboot:
+    post:
+      tags: [system]
+      summary: Reboot the hub
+      responses:
+        "202": { description: Rebooting }
+        default: { $ref: "#/components/responses/Error" }
+
+  /system/shutdown:
+    post:
+      tags: [system]
+      summary: Power the hub off
+      responses:
+        "202": { description: Shutting down }
+        default: { $ref: "#/components/responses/Error" }
+
+  /session:
+    get:
+      tags: [session]
+      security: []
+      summary: The signed-in user, or 401
+      responses:
+        "200":
+          description: Signed in (or the hub is open)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [session]
+      security: []
+      summary: Sign in
+      description: Sets the `smhub_session` cookie (HttpOnly, SameSite=Strict) for the paths `/api/v2` and `/ws/v2` only, so app web UIs on other ports of the hub never receive it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Signed in; the session cookie is set
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [session]
+      summary: Sign out (the session ends at once)
+      responses:
+        "204": { description: Signed out }
+
+  /security:
+    get:
+      tags: [session]
+      summary: Whether sign-in is required
+      responses:
+        "200":
+          description: Security settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Security" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /security/enable:
+    post:
+      tags: [session]
+      summary: Require sign-in, creating or updating the account given
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, minLength: 1, maxLength: 255 }
+                password: { type: string, minLength: 8, maxLength: 128 }
+      responses:
+        "200":
+          description: Sign-in is now required; the caller is signed in as that account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /security/disable:
+    post:
+      tags: [session]
+      summary: Stop requiring sign-in (the hub becomes open on the local network)
+      responses:
+        "200":
+          description: Done
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Security" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /users:
+    get:
+      tags: [session]
+      summary: Accounts
+      responses:
+        "200":
+          description: Accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/User" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [session]
+      summary: Add an account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, minLength: 1, maxLength: 255 }
+                password: { type: string, minLength: 8, maxLength: 128 }
+                admin: { type: boolean, default: true }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /users/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [session]
+      summary: Change an account's password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password: { type: string, minLength: 8, maxLength: 128 }
+                current_password: { type: string, description: Required when changing your own password }
+      responses:
+        "200":
+          description: Changed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [session]
+      summary: Remove an account (not the last one, not yourself)
+      responses:
+        "204": { description: Removed }
+        default: { $ref: "#/components/responses/Error" }
+
+  /preferences:
+    get:
+      tags: [session]
+      summary: The signed-in user's preferences
+      responses:
+        "200":
+          description: Preferences
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preferences" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [session]
+      summary: Change preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PreferencesPatch" }
+      responses:
+        "200":
+          description: Preferences after the change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preferences" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /metrics:
+    get:
+      tags: [system]
+      summary: CPU, memory, storage, uptime
+      responses:
+        "200":
+          description: Metrics
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Metrics" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /services:
+    get:
+      tags: [system]
+      summary: System services and app services with their state
+      responses:
+        "200":
+          description: Services
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Services" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /services/{name}/{action}:
+    parameters:
+      - { name: name, in: path, required: true, schema: { type: string } }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
+    post:
+      tags: [system]
+      summary: Start, stop or restart a service
+      responses:
+        "200":
+          description: The service after the action
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Service" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /operations:
+    get:
+      tags: [system]
+      summary: Recent operations (running ones and the last finished ones)
+      responses:
+        "200":
+          description: Operations
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operations" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /operations/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [system]
+      summary: One operation
+      responses:
+        "200":
+          description: Operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps:
+    get:
+      tags: [apps]
+      summary: The app store and the installed apps
+      responses:
+        "200":
+          description: Apps
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Apps" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps/refresh:
+    post:
+      tags: [apps]
+      summary: Download the package lists again (opkg update)
+      responses:
+        "202": { $ref: "#/components/responses/Operation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps/upgrade:
+    post:
+      tags: [apps]
+      summary: Upgrade every installed package that has an update
+      responses:
+        "202": { $ref: "#/components/responses/Operation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps/{name}:
+    parameters:
+      - { $ref: "#/components/parameters/AppName" }
+    get:
+      tags: [apps]
+      summary: One app with its settings form
+      responses:
+        "200":
+          description: App
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppDetail" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [apps]
+      summary: Change how the hub runs the app
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                autostart: { type: boolean }
+                watchdog: { type: boolean }
+                sidebar: { type: boolean }
+      responses:
+        "200":
+          description: App after the change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppDetail" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps/{name}/settings:
+    parameters:
+      - { $ref: "#/components/parameters/AppName" }
+    patch:
+      tags: [apps]
+      summary: Save the app's settings (database and the app's own config files)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [settings, restart_needed]
+                properties:
+                  settings: { $ref: "#/components/schemas/AppSettingValues" }
+                  restart_needed: { type: boolean }
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps/{name}/{action}:
+    parameters:
+      - { $ref: "#/components/parameters/AppName" }
+      - name: action
+        in: path
+        required: true
+        schema: { type: string, enum: [install, remove, upgrade, start, stop, restart, reset] }
+    post:
+      tags: [apps]
+      summary: Install, remove, upgrade (202 with an operation); start, stop, restart, reset (200)
+      responses:
+        "200":
+          description: Done
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppDetail" }
+        "202": { $ref: "#/components/responses/Operation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps/{name}/changelog:
+    parameters:
+      - { $ref: "#/components/parameters/AppName" }
+    get:
+      tags: [apps]
+      summary: The package changelog in Markdown
+      responses:
+        "200":
+          description: Markdown
+          content:
+            text/markdown:
+              schema: { type: string }
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps/{name}/icon:
+    parameters:
+      - { $ref: "#/components/parameters/AppName" }
+    get:
+      tags: [apps]
+      summary: The app's icon from its package (cached by the browser for an hour)
+      responses:
+        "200":
+          description: Image
+          content:
+            image/svg+xml: {}
+            image/png: {}
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps/{name}/tailscale:
+    parameters:
+      - { $ref: "#/components/parameters/AppName" }
+    get:
+      tags: [apps]
+      summary: Tailscale state (only for the tailscale app)
+      responses:
+        "200":
+          description: State
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tailscale" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps/{name}/tailscale/{action}:
+    parameters:
+      - { $ref: "#/components/parameters/AppName" }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [login, logout] } }
+    post:
+      tags: [apps]
+      summary: Log the hub in to Tailscale with an auth key, or log it out
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                auth_key: { type: string }
+      responses:
+        "200":
+          description: State after the action
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tailscale" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /apps/{name}/thread:
+    parameters:
+      - { $ref: "#/components/parameters/AppName" }
+    get:
+      tags: [apps]
+      summary: Thread border router state (only for the openthread app)
+      responses:
+        "200":
+          description: State
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        default: { $ref: "#/components/responses/Error" }
+
+  /network:
+    get:
+      tags: [network]
+      summary: Interfaces, addresses and internet reachability
+      responses:
+        "200":
+          description: Network
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Network" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /network/ethernet:
+    get:
+      tags: [network]
+      summary: Ethernet settings
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IpSettings" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [network]
+      summary: Change Ethernet settings and reconnect
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IpSettings" }
+      responses:
+        "200":
+          description: Settings after the change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IpSettings" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /wifi:
+    get:
+      tags: [network]
+      summary: Wi-Fi state, the current network, saved and visible networks
+      responses:
+        "200":
+          description: Wi-Fi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Wifi" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [network]
+      summary: Switch the Wi-Fi radio on or off
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: Wi-Fi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Wifi" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /wifi/scan:
+    post:
+      tags: [network]
+      summary: Scan for networks again; the result arrives as a change of `wifi`
+      responses:
+        "202": { description: Scanning }
+        default: { $ref: "#/components/responses/Error" }
+
+  /wifi/connect:
+    post:
+      tags: [network]
+      summary: Connect to a network, saving it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WifiConnect" }
+      responses:
+        "200":
+          description: Connected
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Wifi" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /wifi/disconnect:
+    post:
+      tags: [network]
+      summary: Disconnect from the current network
+      responses:
+        "200":
+          description: Disconnected
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Wifi" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /wifi/saved:
+    delete:
+      tags: [network]
+      summary: Forget a saved network
+      description: The network's name is a query parameter, so a name with "/" reaches the hub intact.
+      parameters:
+        - { name: name, in: query, required: true, schema: { type: string, minLength: 1 } }
+      responses:
+        "204": { description: Forgotten }
+        default: { $ref: "#/components/responses/Error" }
+
+  /vpn:
+    get:
+      tags: [network]
+      summary: WireGuard state and settings
+      responses:
+        "200":
+          description: VPN
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Vpn" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [network]
+      summary: Save WireGuard settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WireguardPatch" }
+      responses:
+        "200":
+          description: VPN
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Vpn" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [network]
+      summary: Remove the WireGuard connection
+      responses:
+        "204": { description: Removed }
+
+  /vpn/{action}:
+    parameters:
+      - { name: action, in: path, required: true, schema: { type: string, enum: [connect, disconnect] } }
+    post:
+      tags: [network]
+      summary: Bring the WireGuard tunnel up or down
+      responses:
+        "200":
+          description: VPN
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Vpn" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /lte:
+    get:
+      tags: [network]
+      summary: The 4G modem (only when the hub has one)
+      responses:
+        "200":
+          description: LTE
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lte" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [network]
+      summary: Change modem settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LteSettings" }
+      responses:
+        "200":
+          description: LTE
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lte" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /lte/{action}:
+    parameters:
+      - { name: action, in: path, required: true, schema: { type: string, enum: [power, reset, connect, disconnect, refresh] } }
+    post:
+      tags: [network]
+      summary: Modem commands
+      description: >
+        power switches the modem on (a short pulse on its power key, as the OS
+        does at boot; it is not a toggle). reset pulses its reset line. connect,
+        disconnect and refresh re-read the modem state.
+      responses:
+        "200":
+          description: LTE
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lte" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /radios:
+    get:
+      tags: [settings]
+      summary: The radios of this model and their firmware
+      responses:
+        "200":
+          description: Radios
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Radios" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /radios/{index}/firmware:
+    parameters:
+      - { $ref: "#/components/parameters/RadioIndex" }
+      - { name: mode, in: query, required: true, schema: { $ref: "#/components/schemas/RadioMode" } }
+    get:
+      tags: [settings]
+      summary: Firmware available for this radio in this mode
+      responses:
+        "200":
+          description: Firmware list, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Firmware" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /radios/{index}/flash:
+    parameters:
+      - { $ref: "#/components/parameters/RadioIndex" }
+    post:
+      tags: [settings]
+      summary: Flash firmware; the app using the radio is stopped and started again
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode, version]
+              properties:
+                mode: { $ref: "#/components/schemas/RadioMode" }
+                version: { type: string }
+                ieee: { type: [string, "null"], description: "IEEE address to write (16 hex digits), Silicon Labs and TI Zigbee only" }
+      responses:
+        "202": { $ref: "#/components/responses/Operation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /updates:
+    get:
+      tags: [maintenance]
+      summary: OS and app updates
+      responses:
+        "200":
+          description: Updates
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Updates" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [maintenance]
+      summary: Change the update channel or automatic updates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channel: { $ref: "#/components/schemas/Channel" }
+                auto_update: { type: boolean }
+      responses:
+        "200":
+          description: Updates
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Updates" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /updates/check:
+    post:
+      tags: [maintenance]
+      summary: Ask the update server again now
+      responses:
+        "200":
+          description: Updates
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Updates" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /updates/os/install:
+    post:
+      tags: [maintenance]
+      summary: Install an OS release into the other slot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { type: string }
+      responses:
+        "202": { $ref: "#/components/responses/Operation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/general:
+    get:
+      tags: [settings]
+      summary: Hostname, time zone and SD-card configuration
+      responses:
+        "200":
+          description: General settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GeneralSettings" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [settings]
+      summary: Change general settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GeneralSettings" }
+      responses:
+        "200":
+          description: General settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GeneralSettings" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/timezones:
+    get:
+      tags: [settings]
+      summary: Time zone names known to the hub
+      responses:
+        "200":
+          description: Names such as Europe/Kyiv
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/mqtt:
+    get:
+      tags: [settings]
+      summary: The MQTT broker (Mosquitto)
+      responses:
+        "200":
+          description: MQTT settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Mqtt" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [settings]
+      summary: Change the broker settings and restart it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MqttPatch" }
+      responses:
+        "200":
+          description: MQTT settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Mqtt" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/mqtt/users:
+    post:
+      tags: [settings]
+      summary: Add a broker account or change its password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, minLength: 1, maxLength: 64 }
+                password: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        "200":
+          description: MQTT settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Mqtt" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [settings]
+      summary: Remove a broker account
+      description: The user name is a query parameter, so a name with "/" reaches the hub intact.
+      parameters:
+        - { name: username, in: query, required: true, schema: { type: string, minLength: 1 } }
+      responses:
+        "200":
+          description: MQTT settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Mqtt" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/usb:
+    get:
+      tags: [settings]
+      summary: USB port role and connected devices
+      responses:
+        "200":
+          description: USB
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Usb" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [settings]
+      summary: Change the USB port role (takes effect after a restart)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [device, host] }
+      responses:
+        "200":
+          description: USB
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Usb" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/ssh:
+    get:
+      tags: [settings]
+      summary: SSH access
+      responses:
+        "200":
+          description: SSH
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ssh" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [settings]
+      summary: Change SSH access and restart the SSH server
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SshPatch" }
+      responses:
+        "200":
+          description: SSH
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ssh" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/ssh/keys:
+    post:
+      tags: [settings]
+      summary: Add a public key for the device user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key: { type: string }
+      responses:
+        "200":
+          description: SSH
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ssh" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [settings]
+      summary: Remove a public key
+      description: >
+        The fingerprint ("SHA256:" and base64, which uses "/" and "+") is a query parameter, so it
+        reaches the hub intact.
+      parameters:
+        - { name: fingerprint, in: query, required: true, schema: { type: string, minLength: 1 } }
+      responses:
+        "200":
+          description: SSH
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ssh" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/serial-bridge:
+    get:
+      tags: [settings]
+      summary: Serial ports shared over TCP (ser2net)
+      responses:
+        "200":
+          description: Serial bridge
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SerialBridge" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [settings]
+      summary: Change the shared ports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SerialBridgePatch" }
+      responses:
+        "200":
+          description: Serial bridge
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SerialBridge" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/esphome:
+    get:
+      tags: [settings]
+      summary: Built-in ESPHome device on the second core
+      responses:
+        "200":
+          description: ESPHome
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Esphome" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [settings]
+      summary: Change ESPHome settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EsphomePatch" }
+      responses:
+        "200":
+          description: ESPHome after the change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Esphome" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/esphome/restart:
+    post:
+      tags: [settings]
+      summary: Restart the second core's firmware
+      responses:
+        "200":
+          description: ESPHome
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Esphome" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/backups:
+    get:
+      tags: [maintenance]
+      summary: What a backup includes by default
+      responses:
+        "200":
+          description: Backup settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupSettings" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [maintenance]
+      summary: Change backup defaults
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupSettings" }
+      responses:
+        "200":
+          description: Backup settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupSettings" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /backups/archive:
+    post:
+      tags: [maintenance]
+      summary: Create a backup and download it (tar.xz). Apps are stopped while it is made.
+      description: Accepts a JSON body or an HTML form (`include_home=true&extra_dirs=/a,/b`), so a plain form submission downloads it.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupSettings" }
+          application/x-www-form-urlencoded:
+            schema: { type: object }
+      responses:
+        "200":
+          description: The archive
+          content:
+            application/x-xz: {}
+        default: { $ref: "#/components/responses/Error" }
+
+  /backups/restore:
+    post:
+      tags: [maintenance]
+      summary: Restore an uploaded backup. With dry_run only its contents are reported.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upload_id]
+              properties:
+                upload_id: { type: string }
+                dry_run: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Contents (dry run)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupInfo" }
+        "202": { $ref: "#/components/responses/Operation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /backups/factory:
+    get:
+      tags: [maintenance]
+      summary: The factory backup made before the last factory reset, if any
+      responses:
+        "200":
+          description: Factory backup
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FactoryBackup" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [maintenance]
+      summary: Delete the factory backup
+      responses:
+        "204": { description: Deleted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /backups/factory/archive:
+    get:
+      tags: [maintenance]
+      summary: Download the factory backup
+      responses:
+        "200":
+          description: The archive
+          content:
+            application/x-xz: {}
+        default: { $ref: "#/components/responses/Error" }
+
+  /backups/factory/restore:
+    post:
+      tags: [maintenance]
+      summary: Restore the factory backup
+      responses:
+        "202": { $ref: "#/components/responses/Operation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /uploads:
+    post:
+      tags: [maintenance]
+      summary: Start an upload; send the file with PUT in pieces of at most 768 KiB
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [size]
+              properties:
+                size: { type: integer, minimum: 0 }
+                name: { type: string }
+      responses:
+        "201":
+          description: Upload started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Upload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /uploads/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+      - { name: offset, in: query, required: true, schema: { type: integer, minimum: 0 } }
+    put:
+      tags: [maintenance]
+      summary: Send one piece at the given offset
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: {}
+      responses:
+        "200":
+          description: Progress
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Upload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /files:
+    get:
+      tags: [maintenance]
+      summary: List a folder
+      parameters:
+        - { name: path, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Folder
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Folder" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [maintenance]
+      summary: Delete a file or folder
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /files/content:
+    get:
+      tags: [maintenance]
+      summary: Download or open a file (a folder is downloaded as a tar archive)
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Bytes
+          content:
+            application/octet-stream: {}
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      tags: [maintenance]
+      summary: Save text to a file (at most 768 KiB)
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: {}
+      responses:
+        "204": { description: Saved }
+        default: { $ref: "#/components/responses/Error" }
+
+  /files/upload:
+    post:
+      tags: [maintenance]
+      summary: Move a finished upload into a folder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upload_id, path]
+              properties:
+                upload_id: { type: string }
+                path: { type: string, description: Full path of the new file }
+      responses:
+        "204": { description: Placed }
+        default: { $ref: "#/components/responses/Error" }
+
+  /files/folder:
+    post:
+      tags: [maintenance]
+      summary: Create a folder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string }
+      responses:
+        "204": { description: Created }
+        default: { $ref: "#/components/responses/Error" }
+
+  /files/move:
+    post:
+      tags: [maintenance]
+      summary: Move, rename or copy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to]
+              properties:
+                from: { type: string }
+                to: { type: string }
+                copy: { type: boolean, default: false }
+      responses:
+        "204": { description: Done }
+        default: { $ref: "#/components/responses/Error" }
+
+  /tokens:
+    get:
+      tags: [session]
+      summary: API tokens for other programs (values are never shown again)
+      responses:
+        "200":
+          description: Tokens
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Token" } }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [session]
+      summary: Make a token; its value is in this answer only
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 40 }
+      responses:
+        "201":
+          description: The token, with its value
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/Token" }
+                  - type: object
+                    required: [token]
+                    properties:
+                      token: { type: string }
+        default: { $ref: "#/components/responses/Error" }
+
+  /tokens/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [session]
+      summary: Revoke a token
+      responses:
+        "204": { description: Revoked }
+        default: { $ref: "#/components/responses/Error" }
+
+  /hardware:
+    get:
+      tags: [hardware]
+      summary: The hub's own hardware now (also the `hardware` resource)
+      responses:
+        "200":
+          description: Hardware
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Hardware" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /hardware/buzzer/play:
+    post:
+      tags: [hardware]
+      summary: Play a sound (a preset, one of the user's melodies, or RTTTL)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                sound: { type: string, description: A preset id or the name of a saved melody }
+                rtttl: { type: string, maxLength: 512 }
+      responses:
+        "200":
+          description: What happened to the request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlayResult" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /hardware/buzzer/stop:
+    post:
+      tags: [hardware]
+      summary: Stop the sound that plays (and, by default, those waiting)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clear: { type: boolean, default: true }
+      responses:
+        "200":
+          description: Hardware
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Hardware" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /hardware/light:
+    patch:
+      tags: [hardware]
+      summary: Change the ambient light (full-size SMHUB)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LightPatch" }
+      responses:
+        "200":
+          description: Hardware
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Hardware" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /hardware/leds:
+    patch:
+      tags: [hardware]
+      summary: Switch the service LEDs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                power: { type: boolean }
+                blue: { type: boolean }
+      responses:
+        "200":
+          description: Hardware
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Hardware" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /hardware/find:
+    post:
+      tags: [hardware]
+      summary: Start or stop "Find my hub" (a chime every 2 s for 30 s and an amber pulse)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [on]
+              additionalProperties: false
+              properties:
+                on: { type: boolean }
+      responses:
+        "200":
+          description: Hardware
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Hardware" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /settings/hardware:
+    get:
+      tags: [hardware]
+      summary: Event sounds, quiet hours, night mode, signals, button actions, infrared listening
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HardwareSettings" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [hardware]
+      summary: Change some settings; objects merge, so `{"sounds":{"mute":true}}` changes one value
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Settings after the change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HardwareSettings" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /ir:
+    get:
+      tags: [hardware]
+      summary: Infrared receiver and transmitter (also the `ir` resource)
+      responses:
+        "200":
+          description: Infrared
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ir" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /ir/learn:
+    post:
+      tags: [hardware]
+      summary: Wait up to 30 s for a code from a remote; it arrives in `last` of the `ir` resource
+      responses:
+        "200":
+          description: Infrared
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ir" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [hardware]
+      summary: Stop learning
+      responses:
+        "200":
+          description: Infrared
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ir" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /ir/codes:
+    post:
+      tags: [hardware]
+      summary: Save a code (the last one received, or given in full)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IrCodeNew" }
+      responses:
+        "201":
+          description: The code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IrCode" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /ir/codes/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [hardware]
+      summary: Rename a code, move it to another device, or mark it as a favourite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 40 }
+                device: { type: string, maxLength: 40 }
+                favourite: { type: boolean }
+      responses:
+        "200":
+          description: The code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IrCode" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [hardware]
+      summary: Delete a code
+      responses:
+        "204": { description: Deleted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /ir/codes/{id}/send:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [hardware]
+      summary: Send a saved code
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema: { type: object, properties: { result: { type: string, enum: [sent] } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /ir/send:
+    post:
+      tags: [hardware]
+      summary: Send a code given in the request (protocol and scancode, or raw timings)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IrSpec" }
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema: { type: object, properties: { result: { type: string, enum: [sent] } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /ir/export:
+    get:
+      tags: [hardware]
+      summary: Every saved code with its timings, for a file
+      responses:
+        "200":
+          description: Codes
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: "#/components/responses/Error" }
+
+  /ir/import:
+    post:
+      tags: [hardware]
+      summary: Add codes from an export
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [codes], properties: { codes: { type: array, items: { type: object, additionalProperties: true } } } }
+      responses:
+        "200":
+          description: How many were added
+          content:
+            application/json:
+              schema: { type: object, required: [imported], properties: { imported: { type: integer } } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /ups:
+    get:
+      tags: [hardware]
+      summary: The UPS board on J10 (full-size SMHUB)
+      responses:
+        "200":
+          description: The UPS board
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ups" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [hardware]
+      summary: Mark a UPS board as connected to J10, or not
+      description: |
+        Nothing on the board tells the hub reliably, so the owner says so. Connected,
+        the hub turns I2C2 on J10's pins 1 and 3 on for talking to the board, as
+        `/dev/i2c-2`: a device-tree overlay, from the next start (`restart_needed`).
+        409 on a model without J10.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [installed]
+              properties:
+                installed: { type: boolean }
+      responses:
+        "200":
+          description: The UPS board
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ups" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /ups/scan:
+    post:
+      tags: [hardware]
+      summary: The addresses that answer on the UPS board's I2C bus; 409 while the bus is not on
+      responses:
+        "200":
+          description: The addresses, 0x08 to 0x77
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [addresses]
+                properties:
+                  addresses: { type: array, items: { type: integer, minimum: 8, maximum: 119 } }
+        default: { $ref: "#/components/responses/Error" }
+
+  /logs:
+    get:
+      tags: [maintenance]
+      summary: Logs the hub keeps
+      responses:
+        "200":
+          description: Logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LogInfo" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /logs/{name}:
+    parameters:
+      - { name: name, in: path, required: true, schema: { type: string } }
+      - { name: lines, in: query, schema: { type: integer, minimum: 1, maximum: 5000, default: 500 } }
+      - { name: filter, in: query, schema: { type: string } }
+    get:
+      tags: [maintenance]
+      summary: The last lines of a log
+      responses:
+        "200":
+          description: Lines, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lines]
+                properties:
+                  lines:
+                    type: array
+                    items: { type: string }
+        default: { $ref: "#/components/responses/Error" }
+
+  /logs/{name}/download:
+    parameters:
+      - { name: name, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [maintenance]
+      summary: The whole log file
+      responses:
+        "200":
+          description: Text
+          content:
+            text/plain: {}
+        default: { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: smhub_session
+    token:
+      type: http
+      scheme: bearer
+      description: An API token from POST /tokens
+
+  parameters:
+    AppName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z0-9][a-z0-9+._-]*$" }
+    RadioIndex:
+      name: index
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1, maximum: 3 }
+
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Operation:
+      description: Started; follow the operation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Operation" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: >
+                Stable code the UI translates: unauthorized, forbidden, not_found,
+                invalid_value, conflict, busy, unavailable, auth_failed,
+                rate_limited, too_large, not_supported, internal; for Wi-Fi joins
+                also wifi_not_found (field ssid) and wifi_wrong_password (field
+                password).
+            message: { type: string, description: English detail for logs and experts }
+            field: { type: [string, "null"], description: The input field at fault }
+
+    Timestamp:
+      type: string
+      format: date-time
+
+    System:
+      type: object
+      required: [model, product, family, hostname, os_version, core_version, uptime_s, time, timezone, auth, setup_needed, features, radios]
+      properties:
+        model: { type: string, description: "Model string from the EEPROM, lower case, e.g. essential, nanomr3" }
+        product: { type: string, description: "Display name, e.g. SMHUB Essential" }
+        family: { type: string, enum: [smhub, nano, nanomr] }
+        hardware_revision: { type: [string, "null"] }
+        device_id: { type: [string, "null"], description: UUID from the EEPROM }
+        hostname: { type: string }
+        os_version: { type: string }
+        core_version: { type: string, description: Version of smhubd }
+        ui_version:
+          type: [string, "null"]
+          description: >
+            Version of the installed smhub-ui package. nginx sends the UI's files
+            without cache headers, so a browser can run an older UI from its
+            cache; a UI built for another version reloads the page once.
+        uptime_s: { type: number }
+        time: { $ref: "#/components/schemas/Timestamp" }
+        timezone: { type: string, description: The hub's time zone }
+        auth:
+          type: object
+          required: [required]
+          properties:
+            required: { type: boolean, description: Sign-in is required }
+        setup_needed:
+          type: boolean
+          description: >
+            Offer the first-run setup. True only on a hub the previous backend
+            never ran on (a new hub or a factory reset), until
+            `POST /system/setup-done`.
+        features:
+          type: object
+          description: What this hub has. Pages for missing features are hidden.
+          required: [wifi, bluetooth, lte, zwave, poe, ups, ambient_light, buzzer, ir, esphome, sdcard, sd_slot, usb_role]
+          properties:
+            wifi: { type: boolean }
+            bluetooth: { type: boolean }
+            lte: { type: boolean, description: A 4G module is fitted }
+            zwave: { type: boolean, description: A Z-Wave module is fitted }
+            poe: { type: boolean }
+            ups: { type: boolean, description: "The owner marked a UPS board as connected to J10 (PATCH /ups); nothing on the board is read" }
+            ambient_light: { type: boolean }
+            buzzer: { type: boolean }
+            ir: { type: boolean }
+            esphome: { type: boolean, description: The second core runs ESPHome }
+            sdcard: { type: boolean, description: An SD card is mounted }
+            sd_slot: { type: boolean, description: The board has an SD card slot, so the UI can say when no card is inserted }
+            usb_role: { type: boolean, description: The USB-C port can switch between device and host }
+        radios:
+          type: array
+          items: { $ref: "#/components/schemas/RadioSlot" }
+
+    RadioSlot:
+      type: object
+      required: [index, port, chip, key, vendor, protocols]
+      properties:
+        index: { type: integer }
+        port: { type: string }
+        chip: { type: string, description: "Chip name, e.g. EFR32MG24" }
+        key: { type: string, description: "Firmware key, e.g. SMHUB-MG24" }
+        vendor: { type: string, enum: [ti, silabs] }
+        protocols:
+          type: array
+          items: { type: string, enum: [zigbee, thread, zwave] }
+
+    Session:
+      type: object
+      required: [user, mode]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        mode: { type: string, enum: [password, open], description: "open: the hub does not require sign-in" }
+
+    Security:
+      type: object
+      required: [required, username]
+      properties:
+        required: { type: boolean }
+        username: { type: [string, "null"], description: The account set up for sign-in }
+
+    User:
+      type: object
+      required: [id, username, admin]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        admin:
+          type: boolean
+          description: Stored with the account; every account has the same rights (decision D41)
+
+    Preferences:
+      type: object
+      required: [language, region, theme, units, temperature, clock, timezone, level, dashboard, currency, text_size, density, tone]
+      properties:
+        language: { type: string, description: "UI language, e.g. en, uk" }
+        region: { type: string, description: "BCP 47 locale for formats, e.g. en-US, uk-UA" }
+        theme: { type: string, enum: [auto, light, dark] }
+        units: { type: string, enum: [metric, imperial] }
+        temperature: { type: string, enum: [c, f] }
+        clock: { type: string, enum: [auto, "12h", "24h"] }
+        timezone: { type: string, description: "Time zone for showing times: hub, browser, or a zone name" }
+        level: { type: string, enum: [simple, advanced] }
+        dashboard:
+          type: array
+          description: Card identifiers in display order
+          items: { type: string }
+        currency: { type: string, description: "ISO 4217 code; until the user picks one, the usual currency of their region (EUR when unknown)" }
+        text_size: { type: string, enum: [small, normal, large], description: "Size of all text; normal until chosen" }
+        density: { type: string, enum: [comfortable, compact], description: "Spacing of the layout; comfortable until chosen" }
+        tone: { type: string, enum: [green, teal, blue, violet, pink], description: "Color of buttons, links and highlights; status colors do not change. green (SMLIGHT) until chosen" }
+
+    PreferencesPatch:
+      type: object
+      properties:
+        language: { type: string }
+        region: { type: string }
+        theme: { type: string, enum: [auto, light, dark] }
+        units: { type: string, enum: [metric, imperial] }
+        temperature: { type: string, enum: [c, f] }
+        clock: { type: string, enum: [auto, "12h", "24h"] }
+        timezone: { type: string }
+        level: { type: string, enum: [simple, advanced] }
+        dashboard:
+          type: array
+          items: { type: string }
+        currency: { type: string }
+        text_size: { type: string, enum: [small, normal, large] }
+        density: { type: string, enum: [comfortable, compact] }
+        tone: { type: string, enum: [green, teal, blue, violet, pink] }
+
+    Metrics:
+      type: object
+      required: [cpu_percent, load, memory, swap, uptime_s, storage]
+      properties:
+        cpu_percent: { type: number }
+        load: { type: array, items: { type: number }, minItems: 3, maxItems: 3 }
+        memory: { $ref: "#/components/schemas/Usage" }
+        swap: { $ref: "#/components/schemas/Usage" }
+        uptime_s: { type: number }
+        storage:
+          type: array
+          items:
+            allOf:
+              - { $ref: "#/components/schemas/Usage" }
+              - type: object
+                required: [id, path]
+                properties:
+                  id: { type: string, enum: [user, sdcard] }
+                  path: { type: string }
+
+    Usage:
+      type: object
+      required: [total, used]
+      properties:
+        total: { type: integer }
+        used: { type: integer }
+
+    Services:
+      type: object
+      required: [services]
+      properties:
+        services:
+          type: array
+          items: { $ref: "#/components/schemas/Service" }
+
+    Service:
+      type: object
+      required: [name, state, autostart, kind]
+      properties:
+        name: { type: string }
+        app: { type: [string, "null"], description: The app this service belongs to }
+        state: { $ref: "#/components/schemas/ServiceState" }
+        autostart: { type: boolean }
+        kind: { type: string, enum: [system, app] }
+
+    ServiceState:
+      type: string
+      enum: [started, stopped, starting, stopping, crashed, inactive, unknown]
+
+    Operations:
+      type: object
+      required: [operations]
+      properties:
+        operations:
+          type: array
+          items: { $ref: "#/components/schemas/Operation" }
+
+    Operation:
+      type: object
+      required: [id, kind, state, started_at]
+      properties:
+        id: { type: string }
+        kind:
+          type: string
+          enum: [app_install, app_remove, app_upgrade, apps_refresh, apps_upgrade, os_update, radio_flash, backup_restore, factory_restore]
+        target:
+          type: [string, "null"]
+          description: >
+            What the operation acts on: the package name for app_install,
+            app_remove and app_upgrade; the radio's index ("1") for radio_flash;
+            the release version for os_update; null for the others.
+        state: { type: string, enum: [running, succeeded, failed] }
+        progress: { type: [number, "null"], minimum: 0, maximum: 100 }
+        step:
+          type: [string, "null"]
+          description: >
+            Current step, a translation key. app_install, app_upgrade, apps_upgrade:
+            installing. app_remove: removing. apps_refresh: updating_lists.
+            radio_flash: downloading, stopping, preparing, flashing, writing,
+            starting. os_update: preparing, downloading, verifying, writing,
+            installing. backup_restore and factory_restore: verifying, stopping,
+            restoring, starting.
+          enum: [null, installing, removing, updating_lists, downloading, stopping, preparing, flashing, writing, starting, verifying, restoring]
+        started_at: { $ref: "#/components/schemas/Timestamp" }
+        finished_at: { oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }] }
+        error: { type: [string, "null"] }
+        reboot_needed: { type: boolean }
+
+    Apps:
+      type: object
+      required: [apps, channel, updates]
+      properties:
+        apps:
+          type: array
+          items: { $ref: "#/components/schemas/AppSummary" }
+        channel: { $ref: "#/components/schemas/Channel" }
+        updates: { type: integer, description: Installed apps with an update }
+        refreshed_at: { oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }] }
+
+    AppSummary:
+      type: object
+      required: [name, description, section, installed, latest_version, update_available, is_service, autostart, sidebar, compatible, system]
+      properties:
+        name: { type: string }
+        description: { type: [string, "null"] }
+        section: { type: [string, "null"], description: "Feed section, e.g. apps, advanced, community" }
+        installed: { type: boolean }
+        installed_version: { type: [string, "null"] }
+        latest_version: { type: string }
+        update_available: { type: boolean }
+        state: { oneOf: [{ $ref: "#/components/schemas/ServiceState" }, { type: "null" }] }
+        is_service: { type: boolean }
+        autostart: { type: boolean }
+        sidebar: { type: boolean }
+        web: { oneOf: [{ $ref: "#/components/schemas/AppWeb" }, { type: "null" }] }
+        icon: { type: [string, "null"], description: URL of the app's icon }
+        homepage: { type: [string, "null"] }
+        size: { type: [integer, "null"] }
+        required_os: { type: [string, "null"] }
+        compatible: { type: boolean, description: The running OS meets required_os }
+        system: { type: boolean, description: Part of the hub itself; cannot be removed from the UI }
+
+    AppWeb:
+      type: object
+      required: [port]
+      properties:
+        port: { type: integer }
+        https_port: { type: [integer, "null"] }
+
+    AppDetail:
+      allOf:
+        - { $ref: "#/components/schemas/AppSummary" }
+        - type: object
+          required: [settings, secrets_set, form, data_dirs, watchdog, can_reset, has_changelog, extras]
+          properties:
+            settings: { $ref: "#/components/schemas/AppSettingValues" }
+            secrets_set:
+              type: array
+              description: Password fields that have a value. Their values are never sent; send a new value to change one, or leave the field out to keep it.
+              items: { type: string }
+            form:
+              type: array
+              description: The settings form, from the package's schema.json, in order
+              items: { $ref: "#/components/schemas/FormField" }
+            data_dirs: { type: array, items: { type: string } }
+            watchdog: { type: [boolean, "null"], description: "null: the app has no watchdog" }
+            can_reset: { type: boolean }
+            has_changelog: { type: boolean }
+            log: { type: [string, "null"], description: "Name for /logs/{name}" }
+            extras:
+              type: array
+              description: Extra panels the UI shows for this app
+              items: { type: string, enum: [tailscale, thread] }
+
+    AppSettingValues:
+      type: object
+      additionalProperties: true
+
+    FormField:
+      type: object
+      required: [key, type]
+      properties:
+        key: { type: string }
+        type: { type: string, enum: [text, password, number, integer, boolean, enum, separator, list] }
+        default: {}
+        options:
+          type: array
+          items:
+            type: object
+            required: [value]
+            properties:
+              value: {}
+              label: { type: string }
+        min: { type: number }
+        max: { type: number }
+        pattern: { type: string }
+        required: { type: boolean }
+        advanced: { type: boolean }
+        read_only:
+          type: boolean
+          description: >-
+            The package marks the setting `read-only` (for example Z-Wave JS UI's
+            security keys, which the app makes itself). It is shown but never
+            written: a save that names it is refused. On a separator it covers
+            the group's on/off switch.
+        label: { type: string, description: Translation key or text from the package }
+        description: { type: string }
+        toggle:
+          type: object
+          description: For a separator that switches a group on or off
+          properties:
+            field: { type: string }
+            default: { type: boolean }
+
+    Channel:
+      type: string
+      enum: [stable, dev]
+
+    Tailscale:
+      type: object
+      required: [running, state]
+      properties:
+        running: { type: boolean }
+        state: { type: string, description: "Tailscale's backend state, e.g. Running, NeedsLogin, Stopped" }
+        online: { type: [boolean, "null"] }
+        hostname: { type: [string, "null"] }
+        addresses: { type: array, items: { type: string } }
+
+    Network:
+      type: object
+      required: [interfaces, hostname]
+      properties:
+        hostname: { type: string }
+        internet: { type: [boolean, "null"] }
+        interfaces:
+          type: array
+          items: { $ref: "#/components/schemas/Interface" }
+
+    Interface:
+      type: object
+      required: [name, kind, state, addresses]
+      properties:
+        name: { type: string }
+        kind: { type: string, enum: [ethernet, wifi, usb, vpn, lte, other] }
+        state: { type: string, enum: [connected, connecting, disconnected, unavailable, unmanaged] }
+        connection: { type: [string, "null"] }
+        mac: { type: [string, "null"] }
+        addresses: { type: array, items: { type: string }, description: CIDR notation }
+        gateway: { type: [string, "null"] }
+        dns: { type: array, items: { type: string } }
+        speed_mbps: { type: [integer, "null"] }
+
+    IpSettings:
+      type: object
+      properties:
+        method: { type: string, enum: [auto, manual] }
+        addresses:
+          type: array
+          items: { type: string, description: "CIDR, e.g. 192.168.1.20/24" }
+        gateway: { type: [string, "null"] }
+        dns: { type: array, items: { type: string } }
+        mtu: { type: [integer, "null"], minimum: 576, maximum: 9000 }
+        autoconnect: { type: boolean }
+
+    Wifi:
+      type: object
+      required: [available, enabled, state, current, saved, networks]
+      properties:
+        available: { type: boolean }
+        enabled: { type: boolean }
+        state: { type: string, enum: [connected, connecting, disconnected, unavailable] }
+        current:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [ssid]
+              properties:
+                ssid: { type: string }
+                signal: { type: [integer, "null"] }
+                security: { type: [string, "null"] }
+                frequency_mhz: { type: [integer, "null"] }
+                addresses: { type: array, items: { type: string } }
+        saved:
+          type: array
+          items:
+            type: object
+            required: [name, ssid, autoconnect]
+            properties:
+              name: { type: string }
+              ssid: { type: string }
+              autoconnect: { type: boolean }
+        networks:
+          type: array
+          items:
+            type: object
+            required: [ssid, signal, security, saved, in_use]
+            properties:
+              ssid: { type: string }
+              signal: { type: integer, minimum: 0, maximum: 100 }
+              security: { type: string, description: "none, WPA, WPA2, WPA3, WPA2/WPA3, ..." }
+              frequency_mhz: { type: [integer, "null"] }
+              saved: { type: boolean }
+              in_use: { type: boolean }
+        scanned_at: { oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }] }
+
+    WifiConnect:
+      type: object
+      required: [ssid]
+      properties:
+        ssid: { type: string, minLength: 1, maxLength: 32 }
+        password: { type: [string, "null"], maxLength: 63 }
+        security: { type: string, enum: [auto, none, WPA, WPA2, WPA3, WPA2WPA3, WPAMixed], default: auto }
+        hidden: { type: boolean, default: false }
+        ip: { $ref: "#/components/schemas/IpSettings" }
+
+    Vpn:
+      type: object
+      required: [configured, active, state, settings]
+      properties:
+        configured: { type: boolean }
+        active: { type: boolean }
+        state: { type: string, enum: [connected, connecting, disconnected, unconfigured] }
+        settings: { $ref: "#/components/schemas/Wireguard" }
+        handshake_at: { oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }] }
+        rx_bytes: { type: [integer, "null"] }
+        tx_bytes: { type: [integer, "null"] }
+
+    Wireguard:
+      type: object
+      required: [addresses, private_key_set, public_key, endpoint, allowed_ips, dns, keepalive, preshared_key_set, autoconnect]
+      properties:
+        addresses: { type: array, items: { type: string } }
+        private_key_set: { type: boolean }
+        own_public_key: { type: [string, "null"], description: The hub's public key, derived from the private key }
+        public_key: { type: string, description: The server's public key }
+        endpoint: { type: string, description: "host:port" }
+        allowed_ips: { type: array, items: { type: string } }
+        dns: { type: array, items: { type: string } }
+        keepalive: { type: [integer, "null"] }
+        preshared_key_set: { type: boolean }
+        autoconnect: { type: boolean }
+
+    WireguardPatch:
+      type: object
+      properties:
+        addresses: { type: array, items: { type: string } }
+        private_key: { type: string }
+        public_key: { type: string }
+        endpoint: { type: string }
+        allowed_ips: { type: array, items: { type: string } }
+        dns: { type: array, items: { type: string } }
+        keepalive: { type: [integer, "null"], minimum: 0, maximum: 65535 }
+        preshared_key: { type: [string, "null"] }
+        autoconnect: { type: boolean }
+
+    Lte:
+      type: object
+      required: [present, powered, state, settings]
+      properties:
+        present: { type: boolean }
+        powered: { type: boolean }
+        state: { type: string, enum: [absent, off, searching, registered, roaming, denied, connected, error] }
+        operator: { type: [string, "null"] }
+        technology: { type: [string, "null"] }
+        signal_dbm: { type: [integer, "null"] }
+        signal_percent: { type: [integer, "null"] }
+        imei: { type: [string, "null"] }
+        usb_host_needed: { type: boolean, description: The USB port must be in host mode for the modem }
+        settings: { $ref: "#/components/schemas/LteSettings" }
+
+    LteSettings:
+      type: object
+      properties:
+        apn: { type: string }
+        autostart: { type: boolean }
+        led: { type: boolean }
+
+    RadioMode:
+      type: string
+      enum: [zigbee_coordinator, zigbee_router, thread, zwave_eu, zwave_us, zwave_anz]
+
+    Radios:
+      type: object
+      required: [radios]
+      properties:
+        radios:
+          type: array
+          items:
+            allOf:
+              - { $ref: "#/components/schemas/RadioSlot" }
+              - type: object
+                required: [modes, firmware]
+                properties:
+                  modes: { type: array, items: { $ref: "#/components/schemas/RadioMode" } }
+                  firmware:
+                    oneOf:
+                      - type: "null"
+                      - type: object
+                        properties:
+                          mode: { $ref: "#/components/schemas/RadioMode" }
+                          version: { type: string }
+                          ieee: { type: [string, "null"] }
+                  in_use_by: { type: [string, "null"], description: App or service holding the port }
+
+    Firmware:
+      type: object
+      required: [version]
+      properties:
+        version: { type: string }
+        notes: { type: [string, "null"] }
+        dev: { type: boolean }
+
+    Updates:
+      type: object
+      required: [os, apps, auto_update]
+      properties:
+        os:
+          type: object
+          required: [current, channel, releases, update_available]
+          properties:
+            current: { type: string }
+            channel: { $ref: "#/components/schemas/Channel" }
+            releases:
+              type: array
+              description: Newest first
+              items:
+                type: object
+                required: [version, channel]
+                properties:
+                  version: { type: string }
+                  channel: { $ref: "#/components/schemas/Channel" }
+                  changelog: { type: [string, "null"], description: Markdown }
+                  newer: { type: boolean }
+            update_available: { type: boolean }
+            checked_at: { oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }] }
+            error: { type: [string, "null"] }
+        apps:
+          type: object
+          required: [updates]
+          properties:
+            updates: { type: integer }
+        auto_update: { type: boolean }
+
+    GeneralSettings:
+      type: object
+      properties:
+        hostname: { type: string, pattern: "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$" }
+        timezone: { type: string }
+        sdcard_config: { type: boolean }
+
+    Mqtt:
+      type: object
+      required: [port, allow_external, allow_anonymous, bridge, users, state]
+      properties:
+        port: { type: integer }
+        allow_external: { type: boolean }
+        allow_anonymous: { type: boolean }
+        state: { $ref: "#/components/schemas/ServiceState" }
+        users: { type: array, items: { type: string } }
+        bridge:
+          type: object
+          required: [enabled, connection, address, username, password_set, topics, clean_session]
+          properties:
+            enabled: { type: boolean }
+            connection: { type: string }
+            address: { type: string }
+            username: { type: string }
+            password_set: { type: boolean }
+            topics: { type: array, items: { type: string } }
+            clean_session: { type: boolean }
+
+    MqttPatch:
+      type: object
+      properties:
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        allow_external: { type: boolean }
+        allow_anonymous: { type: boolean }
+        bridge:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            connection: { type: string }
+            address: { type: string }
+            username: { type: string }
+            password: { type: [string, "null"] }
+            topics: { type: array, items: { type: string } }
+            clean_session: { type: boolean }
+
+    Usb:
+      type: object
+      required: [mode, devices]
+      properties:
+        mode: { type: string, enum: [device, host] }
+        pending_mode: { type: [string, "null"], description: Mode that applies after a restart }
+        devices:
+          type: array
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: { type: string, description: "vendor:product" }
+              name: { type: string }
+              bus: { type: [string, "null"] }
+
+    Ssh:
+      type: object
+      required: [password_auth, root_login, pubkey_auth, keys, state]
+      properties:
+        password_auth: { type: boolean }
+        root_login: { type: boolean }
+        pubkey_auth: { type: boolean }
+        state: { $ref: "#/components/schemas/ServiceState" }
+        keys:
+          type: array
+          items:
+            type: object
+            required: [fingerprint, type]
+            properties:
+              fingerprint: { type: string }
+              type: { type: string }
+              comment: { type: [string, "null"] }
+
+    SshPatch:
+      type: object
+      properties:
+        password_auth: { type: boolean }
+        root_login: { type: boolean }
+        pubkey_auth: { type: boolean }
+
+    SerialBridge:
+      type: object
+      required: [service, autostart, state, ports, available_ports]
+      properties:
+        service: { type: string, description: "The OpenRC service; start and stop it with POST /services/{service}/{action}" }
+        autostart: { type: boolean }
+        state: { $ref: "#/components/schemas/ServiceState" }
+        ports:
+          type: array
+          items: { $ref: "#/components/schemas/SerialBridgePort" }
+        available_ports:
+          type: array
+          items:
+            type: object
+            required: [path]
+            properties:
+              path: { type: string }
+              label: { type: [string, "null"] }
+              in_use_by: { type: [string, "null"] }
+
+    SerialBridgePort:
+      type: object
+      required: [device, tcp_port, baud]
+      properties:
+        device: { type: string }
+        tcp_port: { type: integer, minimum: 1, maximum: 65535 }
+        baud: { type: integer }
+        listening:
+          type: boolean
+          readOnly: true
+          description: >-
+            In answers: whether something accepts connections on `tcp_port` now. False while
+            the bridge is `started` means ser2net did not open the port (it may have refused its
+            file; the reason is in the `messages` log). After a save the answer comes once the
+            ports are open, or after 2 s. Ignored in a PATCH.
+
+    SerialBridgePatch:
+      type: object
+      properties:
+        autostart: { type: boolean }
+        ports:
+          type: array
+          maxItems: 4
+          items: { $ref: "#/components/schemas/SerialBridgePort" }
+
+    Esphome:
+      type: object
+      required: [available, ambient_light, buzzer, user_i2c, bluetooth_proxy_mode, encryption_key, state]
+      properties:
+        available: { type: boolean }
+        ambient_light: { type: boolean }
+        buzzer: { type: boolean }
+        user_i2c: { type: boolean }
+        bluetooth_proxy_mode: { type: string, enum: [off, hci, proxy] }
+        encryption_key: { type: string, description: ESPHome API encryption key (base64, 32 bytes); Home Assistant needs it }
+        state: { $ref: "#/components/schemas/ServiceState" }
+        restart_needed: { type: boolean }
+
+    EsphomePatch:
+      type: object
+      properties:
+        ambient_light: { type: boolean }
+        buzzer: { type: boolean }
+        user_i2c: { type: boolean }
+        bluetooth_proxy_mode: { type: string, enum: [off, hci, proxy] }
+        encryption_key: { type: string, pattern: "^[A-Za-z0-9+/]{43}=$" }
+
+    BackupSettings:
+      type: object
+      properties:
+        include_home: { type: boolean }
+        extra_dirs: { type: array, items: { type: string } }
+
+    BackupInfo:
+      type: object
+      required: [created, apps, data_dirs]
+      properties:
+        created: { oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }] }
+        device_id: { type: [string, "null"] }
+        same_device: { type: [boolean, "null"] }
+        apps: { type: array, items: { type: string } }
+        data_dirs: { type: array, items: { type: string } }
+
+    FactoryBackup:
+      type: object
+      required: [available]
+      properties:
+        available: { type: boolean }
+        created: { oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }] }
+        size: { type: [integer, "null"] }
+
+    Upload:
+      type: object
+      required: [id, size, received]
+      properties:
+        id: { type: string }
+        size: { type: integer }
+        received: { type: integer }
+
+    Folder:
+      type: object
+      required: [path, roots, entries, writable]
+      properties:
+        path: { type: string }
+        writable: { type: boolean }
+        roots:
+          type: array
+          items:
+            type: object
+            required: [path, name]
+            properties:
+              path: { type: string }
+              name: { type: string }
+        entries:
+          type: array
+          items:
+            type: object
+            required: [name, kind, size, modified, writable]
+            properties:
+              name: { type: string }
+              kind: { type: string, enum: [file, dir, link] }
+              size: { type: integer }
+              modified: { $ref: "#/components/schemas/Timestamp" }
+              writable: { type: boolean }
+
+    LogInfo:
+      type: object
+      required: [name, size]
+      properties:
+        name:
+          type: string
+          pattern: "^[A-Za-z0-9._-]+$"
+          description: >
+            Used in /logs/{name}. Never contains "/": the hub's nginx decodes %2F before
+            passing a request on. The UI's own log (/var/log/nginx/error.log) is "nginx-error".
+        app: { type: [string, "null"] }
+        size: { type: integer }
+
+    Token:
+      type: object
+      required: [id, name, created, last_used]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        created: { $ref: "#/components/schemas/Timestamp" }
+        last_used: { type: [string, "null"], description: RFC 3339, written at most once a minute }
+
+    Owner:
+      type: string
+      enum: [esphome, linux, other, none]
+      description: >
+        Who drives a device now: the ESPHome firmware on the second core, the hub itself,
+        another program (one of the C services of the OS), or nothing.
+
+    ButtonState:
+      type: object
+      description: >-
+        One of the hub's buttons, as the kernel reports it (the `gpio-keys` key
+        events). The hub reads it itself on every model, with or without ESPHome;
+        ESPHome passes the same presses on to Home Assistant.
+      required: [available, owner, pressed, last]
+      properties:
+        available: { type: boolean, description: This hub has the button }
+        owner: { $ref: "#/components/schemas/Owner" }
+        pressed: { type: boolean }
+        last:
+          oneOf:
+            - type: object
+              required: [gesture, at, held_ms]
+              properties:
+                gesture: { type: string, enum: [short, double, long] }
+                at: { $ref: "#/components/schemas/Timestamp" }
+                held_ms: { type: integer, description: "How long the button was held (for a double press, the second press)" }
+            - type: "null"
+
+    Hardware:
+      type: object
+      required: [esphome, buzzer, light, leds, button, button2, ir, find, dark, presets, activity]
+      properties:
+        esphome:
+          type: object
+          required: [installed, connected, error, name]
+          properties:
+            installed: { type: boolean }
+            connected: { type: boolean }
+            error: { type: [string, "null"] }
+            name: { type: string }
+        buzzer:
+          type: object
+          required: [available, owner, playing, queue, can_stop]
+          properties:
+            available: { type: boolean }
+            owner: { $ref: "#/components/schemas/Owner" }
+            playing: { oneOf: [{ $ref: "#/components/schemas/SoundJob" }, { type: "null" }] }
+            queue: { type: array, items: { $ref: "#/components/schemas/SoundJob" } }
+            can_stop: { type: boolean }
+        light:
+          type: object
+          required: [available, owner, known, on, color, brightness, effect, effects, speed, pixels, per_led, signal, error]
+          properties:
+            available: { type: boolean }
+            owner: { $ref: "#/components/schemas/Owner" }
+            known: { type: boolean, description: The state is known (ESPHome reported it) }
+            on: { type: boolean }
+            color: { type: string, pattern: "^#[0-9a-f]{6}$" }
+            brightness: { type: integer, minimum: 0, maximum: 100 }
+            effect: { type: string, description: "None, or one of effects" }
+            effects: { type: array, items: { type: string } }
+            speed: { type: [integer, "null"], description: 1-100; null when the owner has no speed }
+            pixels: { type: [array, "null"], items: { type: string } }
+            per_led: { type: boolean, description: Single LEDs can be set (Linux owner) }
+            signal: { type: [string, "null"], enum: [working, done, failed, attention, null] }
+            error: { type: [string, "null"] }
+        leds:
+          type: object
+          required: [available, owner, known, power, blue]
+          properties:
+            available: { type: boolean }
+            owner: { $ref: "#/components/schemas/Owner" }
+            known: { type: boolean }
+            power: { type: [boolean, "null"] }
+            blue: { type: [boolean, "null"] }
+        button:
+          $ref: "#/components/schemas/ButtonState"
+          description: BTN1, the first button from the left (full-size SMHUB)
+        button2:
+          $ref: "#/components/schemas/ButtonState"
+          description: >-
+            BTN2, the second from the left on the full-size SMHUB and the only
+            button of Nano and Nano MR. Held 10 s, it resets the hub to factory
+            settings (`smhub-reset-daemon`). The third, RST, restarts the chip and
+            no software sees it.
+        ir:
+          type: object
+          required: [available]
+          properties:
+            available: { type: boolean }
+        find: { type: boolean }
+        dark: { type: boolean, description: Night mode or all LEDs off is in force }
+        presets: { type: array, items: { type: string } }
+        activity:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            required: [at, kind, detail, by, result]
+            properties:
+              at: { $ref: "#/components/schemas/Timestamp" }
+              kind: { type: string, enum: [sound, light, leds, ir_send, ir_received, button, find, signal] }
+              detail: { type: string }
+              by: { type: string }
+              result: { type: string }
+
+    SoundJob:
+      type: object
+      required: [id, label, ms, prio, by, started]
+      properties:
+        id: { type: integer }
+        label: { type: string }
+        ms: { type: integer }
+        prio: { type: string, enum: [click, event, person, alarm] }
+        by: { type: string }
+        started: { type: [string, "null"] }
+
+    PlayResult:
+      type: object
+      required: [result, position, reason, ms]
+      properties:
+        result: { type: string, enum: [playing, queued, dropped] }
+        position: { type: [integer, "null"] }
+        reason: { type: [string, "null"], enum: [quiet, repeat, limit, full, null] }
+        ms: { type: integer }
+
+    LightPatch:
+      type: object
+      additionalProperties: false
+      description: >-
+        A colour, brightness, effect or picture turns the light on unless `on` is
+        given too. Effects are named the same whoever draws them (`effects` in
+        Hardware lists them).
+      properties:
+        on: { type: boolean }
+        color: { type: string, pattern: "^#[0-9a-fA-F]{6}$" }
+        brightness: { type: integer, minimum: 0, maximum: 100 }
+        effect: { type: string }
+        speed: { type: integer, minimum: 1, maximum: 100, description: Linux owner only }
+        pixels:
+          type: array
+          description: Twelve colours (Linux owner only); an empty list removes the picture
+          items: { type: string }
+
+    Window:
+      type: object
+      required: [enabled, from, to]
+      properties:
+        enabled: { type: boolean }
+        from: { type: string, pattern: "^[0-2][0-9]:[0-5][0-9]$" }
+        to: { type: string, pattern: "^[0-2][0-9]:[0-5][0-9]$" }
+
+    ButtonAction:
+      type: object
+      required: [action, preset, code, url]
+      properties:
+        action:
+          type: string
+          enum: [none, stop_sound, toggle_light, toggle_leds, play_sound, send_ir, call_url]
+          description: >-
+            `call_url` sends a POST to `url` with the JSON body
+            `{"source": "smhub", "button": "btn1" or "btn2", "gesture": "short", "double" or "long"}`
+        preset: { type: [string, "null"] }
+        code: { type: [string, "null"] }
+        url: { type: [string, "null"] }
+
+    ButtonSettings:
+      type: object
+      required: [short, double, long, feedback]
+      properties:
+        short: { $ref: "#/components/schemas/ButtonAction" }
+        double: { $ref: "#/components/schemas/ButtonAction" }
+        long: { $ref: "#/components/schemas/ButtonAction" }
+        feedback: { type: boolean, description: A click on the buzzer when an action ran }
+
+    HardwareSettings:
+      type: object
+      required: [sounds, light, leds, button, button2, ir]
+      properties:
+        sounds:
+          type: object
+          required: [mute, quiet, events, melodies]
+          properties:
+            mute: { type: boolean }
+            quiet: { $ref: "#/components/schemas/Window" }
+            events:
+              type: object
+              required: [update_done, failed, crashed, backup_done, started, power]
+              properties:
+                update_done: { type: boolean }
+                failed: { type: boolean }
+                crashed: { type: boolean }
+                backup_done: { type: boolean }
+                started: { type: boolean }
+                power: { type: boolean }
+            melodies:
+              type: array
+              maxItems: 32
+              items:
+                type: object
+                required: [name, rtttl]
+                properties:
+                  name: { type: string }
+                  rtttl: { type: string }
+        light:
+          type: object
+          required: [signals]
+          properties:
+            signals: { type: boolean }
+        leds:
+          type: object
+          required: [all_off, night]
+          properties:
+            all_off: { type: boolean }
+            night: { $ref: "#/components/schemas/Window" }
+        button:
+          $ref: "#/components/schemas/ButtonSettings"
+          description: BTN1. A long press is held 1 s or more
+        button2:
+          $ref: "#/components/schemas/ButtonSettings"
+          description: >-
+            BTN2. A long press is held 1 to 3 s; a longer hold does nothing here,
+            because 10 s resets the hub to factory settings
+        ir:
+          type: object
+          required: [listen]
+          properties:
+            listen: { type: boolean }
+
+    IrCode:
+      type: object
+      required: [id, name, device, protocol, scancode, carrier, edges, favourite]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        device: { type: string }
+        protocol: { type: [string, "null"] }
+        scancode: { type: [string, "null"], description: hex, e.g. 0x408 }
+        carrier: { type: integer }
+        edges: { type: integer, description: Raw timings kept }
+        favourite: { type: boolean }
+
+    IrCodeNew:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        device: { type: string }
+        from_last: { type: boolean, description: Save the last code received }
+        protocol: { type: string }
+        scancode: { type: [string, integer] }
+        raw: { type: array, items: { type: integer } }
+        carrier: { type: integer }
+        favourite: { type: boolean }
+
+    IrSpec:
+      type: object
+      additionalProperties: false
+      properties:
+        protocol: { type: string }
+        scancode: { type: [string, integer] }
+        raw: { type: array, items: { type: integer }, maxItems: 1024 }
+        carrier: { type: integer, minimum: 20000, maximum: 60000 }
+
+    Ir:
+      type: object
+      required: [available, learning, listening, last, codes, max_codes]
+      properties:
+        available: { type: boolean }
+        learning:
+          oneOf:
+            - type: object
+              required: [until]
+              properties: { until: { $ref: "#/components/schemas/Timestamp" } }
+            - type: "null"
+        listening: { type: boolean }
+        last:
+          oneOf:
+            - type: object
+              required: [at, protocol, scancode, edges, carrier, matched]
+              properties:
+                at: { $ref: "#/components/schemas/Timestamp" }
+                protocol: { type: [string, "null"] }
+                scancode: { type: [string, "null"] }
+                edges: { type: integer }
+                carrier: { type: integer }
+                matched:
+                  oneOf:
+                    - type: object
+                      required: [id, name, device]
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        device: { type: string }
+                    - type: "null"
+            - type: "null"
+        codes: { type: array, items: { $ref: "#/components/schemas/IrCode" } }
+        max_codes: { type: integer }
+
+    Ups:
+      type: object
+      required: [available, installed, bus, restart_needed]
+      properties:
+        available: { type: boolean, description: "The model has J10 (full-size SMHUB)" }
+        installed: { type: boolean, description: "The owner marked a UPS board as connected" }
+        bus: { type: [integer, "null"], description: "The I2C bus number of J10's I2C2 while Linux has it (2), else null" }
+        restart_needed: { type: boolean, description: "The bus follows `installed` from the next start" }

@@ -1,0 +1,45 @@
+#!/sbin/openrc-run
+# Copyright 2026 SMLIGHT
+# Distributed under the terms of the GNU General Public License v2
+
+description="smhub-services daemon (smhubd)"
+
+supervisor="supervise-daemon"
+command="/opt/bin/smhub-services"
+command_args=""
+output_log="/var/log/smhub-services.log"
+error_log="/var/log/smhub-services.log"
+pidfile="/var/run/smhub-services.pid"
+# smhubd says when it answers requests; services ordered after this one wait for it
+notify="socket:ready"
+# restart after a crash, but not in a tight loop
+respawn_delay=2
+respawn_max=10
+respawn_period=300
+
+# an app install in progress can hold a graceful stop for a while
+retry="TERM/30/KILL/5"
+
+export PATH=/opt/bin:$PATH
+export SMHUB_SERVICES_DATA=/opt/smhub-services
+export PKG_PATH=/var/lib/opkg/info
+
+depend() {
+	need localmount
+	after firstboot-upgrade
+	provide smhub-services
+}
+
+start_pre() {
+	if [ ! -d "$SMHUB_SERVICES_DATA" ]; then
+		eerror "Data directory $SMHUB_SERVICES_DATA does not exist"
+		return 1
+	fi
+	checkpath --directory --mode 755 "$SMHUB_SERVICES_DATA/config/stunnel.conf.d"
+	checkpath --file --mode 0644 --owner smlight:smlight ${output_log}
+	# supervise-daemon (OpenRC 0.63) leaves its readiness socket behind when the service
+	# stops, and the next start then fails with "bind: Address already in use"
+	rm -f "/run/openrc/supervise-${RC_SVCNAME}.sock"
+
+	return 0
+}

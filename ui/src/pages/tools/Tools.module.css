@@ -1,0 +1,124 @@
+.terminal {
+  block-size: calc(100dvh - 260px);
+  min-block-size: 320px;
+  padding: var(--s-2);
+  border-radius: var(--r-md);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  font-size: var(--fs-sm);
+}
+
+.crumb {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--accent-text);
+  font-weight: var(--fw-semibold);
+}
+
+.crumb:hover {
+  background: var(--accent-soft);
+}
+
+.crumbSep {
+  color: var(--text-3);
+}
+
+.fileName {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  border: 0;
+  padding: 0;
+  background: none;
+  font-weight: var(--fw-medium);
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+button.fileName:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.fileName svg {
+  flex: none;
+  color: var(--text-3);
+}
+
+.folderIcon {
+  color: var(--accent) !important;
+}
+
+.hideNarrow {
+  display: none;
+}
+
+@media (min-width: 720px) {
+  .hideNarrow {
+    display: table-cell;
+  }
+}
+
+.editor {
+  min-block-size: 50dvh;
+  font-size: var(--fs-sm);
+}
+
+.preview {
+  max-inline-size: 100%;
+  max-block-size: 60dvh;
+  margin-inline: auto;
+  border-radius: var(--r-sm);
+}
+
+.logs {
+  display: grid;
+  gap: var(--s-4);
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 1100px) {
+  .logs {
+    grid-template-columns: 280px minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.logList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-block-size: 70dvh;
+  overflow: auto;
+}
+
+.logItem {
+  display: flex;
+  flex-direction: column;
+  inline-size: 100%;
+  padding: var(--s-2) var(--s-3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  text-align: start;
+}
+
+.logItem:hover {
+  background: var(--surface-3);
+}
+
+.logItemOn,
+.logItemOn:hover {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}

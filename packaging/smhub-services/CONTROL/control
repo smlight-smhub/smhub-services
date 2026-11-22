@@ -1,0 +1,9 @@
+Package: smhub-services
+Version: 2.0.3-1
+Architecture: riscv64
+Maintainer: smlight-smhub
+Description: Core backend services that power your SMHUB device, handling system configuration, network management, and device health
+Priority: Standard
+Required-OS-Version: 1.0.0
+Depends: nodejs (>= 22.15.1-2), python3-abi-3.14
+Recommends: smhub-broker

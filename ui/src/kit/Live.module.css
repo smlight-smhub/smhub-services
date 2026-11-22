@@ -1,0 +1,65 @@
+.spark {
+  display: block;
+  inline-size: 100%;
+  block-size: 36px;
+  overflow: visible;
+}
+
+.line {
+  fill: none;
+  stroke: var(--chart-1);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.area {
+  fill: var(--chart-1-fill);
+}
+
+.dot {
+  fill: var(--chart-1);
+}
+
+.tone2 .line {
+  stroke: var(--chart-2);
+}
+
+.tone2 .area {
+  fill: var(--chart-2-fill);
+}
+
+.tone2 .dot {
+  fill: var(--chart-2);
+}
+
+.ring {
+  transform: rotate(-90deg);
+  flex: none;
+}
+
+:global([dir='rtl']) .ring {
+  transform: rotate(-90deg) scaleY(-1);
+}
+
+.track {
+  fill: none;
+  stroke: var(--surface-3);
+  stroke-width: 4;
+}
+
+.value {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 4;
+  stroke-linecap: round;
+  transition: stroke var(--t-med) var(--ease);
+}
+
+.warn .value {
+  stroke: var(--warn);
+}
+
+.danger .value {
+  stroke: var(--danger);
+}

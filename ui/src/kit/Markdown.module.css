@@ -1,0 +1,79 @@
+.md {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.md > * + * {
+  margin-block-start: var(--s-3);
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  color: var(--text);
+  font-size: var(--fs-lg);
+  margin-block-start: var(--s-5);
+}
+
+.md h1:first-child,
+.md h2:first-child,
+.md h3:first-child {
+  margin-block-start: 0;
+}
+
+.md ul,
+.md ol {
+  padding-inline-start: var(--s-5);
+  list-style: disc;
+}
+
+.md ol {
+  list-style: decimal;
+}
+
+.md li + li {
+  margin-block-start: var(--s-1);
+}
+
+.md code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-3);
+}
+
+.md pre {
+  padding: var(--s-3);
+  border-radius: var(--r-sm);
+  background: var(--surface-sunken);
+  overflow: auto;
+}
+
+.md pre code {
+  padding: 0;
+  background: none;
+}
+
+.md blockquote {
+  margin: 0;
+  padding-inline-start: var(--s-3);
+  border-inline-start: 3px solid var(--border-strong);
+}
+
+.md table {
+  border-collapse: collapse;
+  inline-size: 100%;
+  font-size: var(--fs-sm);
+}
+
+.md th,
+.md td {
+  padding: var(--s-1) var(--s-2);
+  border: 1px solid var(--border);
+  text-align: start;
+}
+
+.md hr {
+  border: 0;
+  border-block-start: 1px solid var(--border);
+}

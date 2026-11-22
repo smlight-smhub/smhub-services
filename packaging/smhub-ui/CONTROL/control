@@ -1,0 +1,10 @@
+Package: smhub-ui
+Version: 2.0.3-1
+Architecture: all
+Maintainer: smlight-smhub
+Description: SMHUB UI Application
+  Web frontend for SMHUB. Provides the user interface for SMHUB system configuration, control and monitoring.
+Priority: Standard
+Section: web
+Depends: smhub-services (>= 2.0.0~)
+Required-OS-Version: 1.0.0

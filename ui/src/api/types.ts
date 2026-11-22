@@ -1,0 +1,103 @@
+// Names for the contract's types. Nothing here is written by hand: every type
+// is taken from the generated `schema.d.ts` (D7). Regenerate it with
+// `npm run gen:api` after a change to `api/openapi.yaml`.
+import type { components, paths } from './schema';
+
+type S = components['schemas'];
+
+export type Paths = paths;
+export type System = S['System'];
+export type RadioSlot = S['RadioSlot'];
+export type Session = S['Session'];
+export type Security = S['Security'];
+export type User = S['User'];
+export type Preferences = S['Preferences'];
+export type PreferencesPatch = S['PreferencesPatch'];
+export type Metrics = S['Metrics'];
+export type StorageUsage = S['Metrics']['storage'][number];
+export type Usage = S['Usage'];
+export type Services = S['Services'];
+export type Service = S['Service'];
+export type ServiceState = S['ServiceState'];
+export type Operations = S['Operations'];
+export type Operation = S['Operation'];
+export type OperationKind = S['Operation']['kind'];
+export type Apps = S['Apps'];
+export type AppSummary = S['AppSummary'];
+export type AppDetail = S['AppDetail'];
+export type AppWeb = S['AppWeb'];
+export type FormField = S['FormField'];
+export type AppSettingValues = S['AppSettingValues'];
+export type Channel = S['Channel'];
+export type Tailscale = S['Tailscale'];
+export type Network = S['Network'];
+export type Interface = S['Interface'];
+export type IpSettings = S['IpSettings'];
+export type Wifi = S['Wifi'];
+export type WifiNetwork = S['Wifi']['networks'][number];
+export type WifiSaved = S['Wifi']['saved'][number];
+export type WifiConnect = S['WifiConnect'];
+export type Vpn = S['Vpn'];
+export type Wireguard = S['Wireguard'];
+export type WireguardPatch = S['WireguardPatch'];
+export type Lte = S['Lte'];
+export type LteSettings = S['LteSettings'];
+export type RadioMode = S['RadioMode'];
+export type Radios = S['Radios'];
+export type Radio = S['Radios']['radios'][number];
+export type Firmware = S['Firmware'];
+export type Updates = S['Updates'];
+export type OsRelease = S['Updates']['os']['releases'][number];
+export type GeneralSettings = S['GeneralSettings'];
+export type Mqtt = S['Mqtt'];
+export type MqttPatch = S['MqttPatch'];
+export type Usb = S['Usb'];
+export type Ssh = S['Ssh'];
+export type SshPatch = S['SshPatch'];
+export type SerialBridge = S['SerialBridge'];
+export type SerialBridgePort = S['SerialBridgePort'];
+export type SerialBridgePatch = S['SerialBridgePatch'];
+export type Esphome = S['Esphome'];
+export type EsphomePatch = S['EsphomePatch'];
+export type BackupSettings = S['BackupSettings'];
+export type BackupInfo = S['BackupInfo'];
+export type FactoryBackup = S['FactoryBackup'];
+export type Upload = S['Upload'];
+export type Folder = S['Folder'];
+export type FolderEntry = S['Folder']['entries'][number];
+export type LogInfo = S['LogInfo'];
+export type ApiErrorBody = S['Error'];
+export type Token = S['Token'];
+export type Owner = S['Owner'];
+export type Hardware = S['Hardware'];
+export type HardwareSettings = S['HardwareSettings'];
+export type ButtonAction = S['ButtonAction'];
+export type ButtonSettings = S['ButtonSettings'];
+export type ButtonState = S['ButtonState'];
+export type Window = S['Window'];
+export type LightPatch = S['LightPatch'];
+export type PlayResult = S['PlayResult'];
+export type Ir = S['Ir'];
+export type IrCode = S['IrCode'];
+export type IrCodeNew = S['IrCodeNew'];
+export type IrSpec = S['IrSpec'];
+export type Activity = S['Hardware']['activity'][number];
+export type Ups = S['Ups'];
+
+/** Resources available on the event connection, with the shape of their data. */
+export interface LiveResources {
+  system: System;
+  metrics: Metrics;
+  network: Network;
+  wifi: Wifi;
+  services: Services;
+  apps: Apps;
+  updates: Updates;
+  lte: Lte;
+  radios: Radios;
+  operations: Operations;
+  vpn: Vpn;
+  hardware: Hardware;
+  ir: Ir;
+}
+export type LiveName = keyof LiveResources;

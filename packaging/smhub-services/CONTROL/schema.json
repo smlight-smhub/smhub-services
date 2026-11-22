@@ -1,0 +1,16 @@
+{
+    "system": {
+        "data_dir": {
+            "default": "/opt/smhub-services/config",
+            "type": "path"
+        },
+        "iframe_port": {
+            "default": 0,
+            "type": "integer"
+        },
+        "service": {
+            "default": false,
+            "type": "boolean"
+        }
+    }
+}
